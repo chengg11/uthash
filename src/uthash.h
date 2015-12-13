@@ -166,7 +166,8 @@ do {                                                                            
   memset((head)->hh.tbl->buckets, 0,                                             \
           HASH_INITIAL_NUM_BUCKETS*sizeof(struct UT_hash_bucket));               \
   HASH_BLOOM_MAKE((head)->hh.tbl);                                               \
-  (head)->hh.tbl->signature = HASH_SIGNATURE;                                    \
+  (head)->hh.tbl->signature_l = HASH_SIGNATURE_L;                                \
+  (head)->hh.tbl->signature_h = HASH_SIGNATURE_H;                                \
 } while(0)
 
 #define HASH_ADD(hh,head,fieldname,keylen_in,add)                                \
@@ -916,7 +917,8 @@ typedef struct UT_hash_bucket {
 } UT_hash_bucket;
 
 /* random signature used only to find hash tables in external analysis */
-#define HASH_SIGNATURE 0xa0111fe1u
+#define HASH_SIGNATURE_L 0xa0111fe1u
+#define HASH_SIGNATURE_H 0xda6ea983u 
 #define HASH_BLOOM_SIGNATURE 0xb12220f2u
 
 typedef struct UT_hash_table {
@@ -943,7 +945,8 @@ typedef struct UT_hash_table {
     * the hash will still work, albeit no longer in constant time. */
    unsigned ineff_expands, noexpand;
 
-   uint32_t signature; /* used only to find hash tables in external analysis */
+   uint32_t signature_l; /* used only to find hash tables in external analysis */
+   uint32_t signature_h; /* used only to find hash tables in external analysis */
 #ifdef HASH_BLOOM
    uint32_t bloom_sig; /* used only to test bloom exists in external analysis */
    uint8_t *bloom_bv;

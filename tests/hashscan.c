@@ -57,7 +57,8 @@ typedef struct {
 } vma_t;
 #endif
 
-const uint32_t sig = HASH_SIGNATURE;
+const uint32_t sig_l = HASH_SIGNATURE_L;
+const uint32_t sig_h = HASH_SIGNATURE_H;
 int verbose=0;
 int getkeys=0;
 
@@ -162,7 +163,7 @@ static int read_mem(void *dst, int fd, off_t start, size_t len)
 /* later compensate for possible presence of bloom filter */
 static char *tbl_from_sig_addr(char *sig)
 {
-    return (sig - offsetof(UT_hash_table,signature));
+    return (sig - offsetof(UT_hash_table,signature_l));
 }
 
 #define HS_BIT_TEST(v,i) (v[i/8] & (1U << (i%8)))
@@ -393,12 +394,13 @@ done:
 
 
 #ifdef __FreeBSD__
-static void sigscan(pid_t pid, void *start, void *end, uint32_t sig)
+static void sigscan(pid_t pid, void *start, void *end, uint32_t sig_l, uint32_t sig_h)
 {
     struct ptrace_io_desc io_desc;
     int page_size = getpagesize();
     char *buf;
     char *pos;
+    int found_sig_l = 0;
 
     /* make sure page_size is a multiple of the signature size, code below assumes this */
     assert(page_size % sizeof(sig) == 0);
@@ -423,9 +425,16 @@ static void sigscan(pid_t pid, void *start, void *end, uint32_t sig)
         }
 
         /* iterate over the the page using the signature size and look for the sig */
-        for (pos = buf; pos < (buf + page_size); pos += sizeof(sig)) {
-            if (*(uint32_t *) pos == sig) {
-                found(pid, (char *) io_desc.piod_offs + (pos - buf), pid);
+        for (pos = buf; pos < (buf + page_size); pos += sizeof(sig_l)) {
+            if (*(uint32_t *) pos == sig_l) {
+                found_sig_l = 1;
+            } else if (found_sig_l) {
+                if (*(uint32_t *) pos == sig_h) {
+                    found(pid, (char *) io_desc.piod_offs + (pos - buf) - sizeof(sig_l), pid);
+                } else {
+                    vvv("found low signature but not high signature\n");
+                    found_sig_l = 0;
+                }
             }
         }
 
@@ -445,11 +454,12 @@ static void sigscan(pid_t pid, void *start, void *end, uint32_t sig)
     }
 }
 #else
-static void sigscan(int fd, off_t start, off_t end, uint32_t sig, pid_t pid)
+static void sigscan(int fd, off_t start, off_t end, uint32_t sig_l, uint32_t sig_h, pid_t pid)
 {
     int rlen;
     uint32_t u;
     off_t at=0;
+    int found_sig_l = 0;
 
     if (lseek(fd, start, SEEK_SET) == (off_t)-1) {
         fprintf(stderr, "lseek failed: %s\n", strerror(errno));
@@ -457,8 +467,15 @@ static void sigscan(int fd, off_t start, off_t end, uint32_t sig, pid_t pid)
     }
 
     while ( (rlen = read(fd,&u,sizeof(u))) == sizeof(u)) {
-        if (!memcmp(&u,&sig,sizeof(u))) {
-            found(fd, (char*)(start+at),pid);
+        if (!memcmp(&u,&sig_l,sizeof(u))) {
+            found_sig_l = 1;
+        } else if (found_sig_l) {
+            if (!memcmp(&u,&sig_h,sizeof(u))) {
+                found(fd, (char*)(start+at-sizeof(u)),pid);
+            } else {
+                vvv("found low signature but not high signature\n");
+                found_sig_l = 0;
+            }
         }
         at += sizeof(u);
         if ((off_t)(at + sizeof(u)) > end-start) {
@@ -540,7 +557,7 @@ static int scan(pid_t pid)
     vv("scanning peer memory for hash table signatures\n");
     for(i=0; i<num_vmas; i++) {
         vma = vmas[i];
-        sigscan(pid, vma.start, vma.end, sig);
+        sigscan(pid, vma.start, vma.end, sig_l, sig_h);
     }
 
 die:
@@ -616,7 +633,7 @@ static int scan(pid_t pid)
         pend = (void*)vma.end;
         /*fprintf(stderr,"scanning %p-%p %.4s %.5s\n", pstart, pend,
                   vma.perms, vma.device);*/
-        sigscan(memfd, vma.start, vma.end, sig, pid);
+        sigscan(memfd, vma.start, vma.end, sig_l, sig_h, pid);
     }
 
     /* done. close memory and detach. this resumes the target process */
